@@ -4,26 +4,35 @@ author: "Cris Lanting"
 date: "22/04/2020"
 output:
   pdf_document: default
-  html_notebook: default
-  toc: 'true'
-  fig_width: 6 
-  fig_height: 4 
+  fig_width: 6
+  fig_height: 4
+  html_document:
+    df_print: paged
+  toc: yes
+  toc_float: yes
 ---
 ## Introduction
-This [R Markdown](http://rmarkdown.rstudio.com) notebook is used to document the various aspects of the genotype-phenotype analysis in many subjects with hereditary hearing loss based on mutation in the DFNA9 gene. We have data collected [...].
+This [R Markdown](http://rmarkdown.rstudio.com) notebook is used to document the various aspects of the genotype-phenotype analysis in many subjects with hereditary hearing loss based on mutation in the DFNA9 gene. We have data collected [...]
+
+This notebooks is intended to leave a trail of the analyses done en to make it more reprodicible. It now covers the data cleaning, description of the data (group size, how many subjects per group, how many audiograms per subject), plots of the hearing thresholds across age and other descriptors of the data. The next step is to 
 
 ## Load R-packages
 ```{r}
 library(ggplot2)
+library(ggthemr)
 library(drc)
 library(sjPlot)
 library("readxl")
 library("nlme")
 library(lme4)
 library(knitr)
+library(kableExtra)
 library(forcats)
 library(tidyr)
 library(dplyr)
+```
+```{r}
+ggthemr('fresh')
 ```
 
 ## Load data and clean data-frames
@@ -33,116 +42,156 @@ Load data from Excel file and select only relevant columns/rows. The first analy
 data_raw <- read_excel("../data/raw_data/database_20-04-2020.xlsx")
 data_raw$group = factor(data_raw$Domain)
 #leave out data with only n=1 dataset per domain/certain unpublished data.
-data_subset <- subset(data_raw, Smits=='no' & Domainrec!=1 & group!="Ivd1")  
-data <- subset(data_subset, select=c('pid', 'group', 'Leeftijd', 'PTA54ADS'))
+data_subset <-
+  subset(data_raw, Smits == 'no' & Domainrec != 1 & group != "Ivd1")
+data <-
+  subset(data_subset, select = c('pid', 'group', 'Leeftijd', 'PTA54ADS'))
+
+#drop unused levels from a factor in a dataframe, e.g. groups that have no entries anymore.
 data <- droplevels(data)
-#data_raw %>% group_by(group) %>% summarize(count=n())
-#head(data)
+# save processed and cleaned data
+save(data,file="../data/processed_data/data_pta_age_group.Rda")
+
 #check for NaNs in PTA and Leeftijd, should be 0.
-nrow(data[is.na(data$PTA54ADS) | is.na(data$Leeftijd), ])
-#number (n) of counts (i.e. audiograms) per subject (pid)
-summarytable <- data %>% count(group, pid)
+nrow(data[is.na(data$PTA54ADS) | is.na(data$Leeftijd),])
+
 ```
 ## Group description
 
-In the group of DFNA9 patients we have some for which there is longitudinal data, i.e. multiple audiograms over time/age (Leeftijd).
-First, create a table and histogram of number of measurements for each subject id (pid) across the groups
-```{r}
-num_meas_per_id <- aggregate(PTA54ADS ~ pid , data, function(x) length(unique(x)))
-t1 <- table(num_meas_per_id$PTA54ADS)
-```
 
-In total there are `r sum(t1)` subjects with `r dim(data)[1]`  measurements; `r t1[1]` patients with only 1 measurement and `r sum(t1[2:12])` patients with 2 or more measurements, see e.g. table 1 or the histogram.
+In the group of DFNA9 patients we have some for which there is longitudinal data, i.e. multiple audiograms over time/age (Leeftijd). How many subjects are there for each group?
 
 ```{r}
-kable(t1, caption = "Table 1. The number of subjects that each have n audiograms", col.names = c("# audiograms","# subjects"))
+t1 <- data %>%                      # take the data.frame "data"
+  filter(!is.na(pid)) %>%     # Using "data", filter out all rows with NAs in aa 
+  group_by(group) %>%         # Then, with the filtered data, group it by "group"
+  summarise("# subjects" = n_distinct(pid))   # Now summarise with unique elements per group
+kable(t1, caption = "Table 1. The number of subjects per group",) %>%
+  kable_styling(bootstrap_options = "striped", full_width = F)
 ```
 
+Next, create a table and histogram of number of measurements for each subject id (pid) across the groups
+
+```{r}
+num_meas_per_id <-
+  aggregate(PTA54ADS ~ pid , data, function(x)
+    length(unique(x)))
+t2 <- table(num_meas_per_id$PTA54ADS)
+```
+
+In total there are `r sum(t2)` subjects with `r dim(data)[1]`  measurements; `r t2[1]` patients with only 1 measurement and `r sum(t2[2:12])` patients with 2 or more measurements, see e.g. table 1 or the histogram.
+
+```{r}
+kable(t2,
+      caption = "Table 2. The number of subjects that each have n audiograms",
+      col.names = c("# audiograms", "# subjects")) %>%
+  kable_styling(bootstrap_options = "striped", full_width = F)
+```
 
 Now make a histogram of the number of audiograms across patients in each of the groups
 ```{r}
-ggplot(data=summarytable, aes(x=n,fill=group)) + 
-  geom_histogram(binwidth=1) +
-  facet_wrap(~group) +
+#number (n) of counts (i.e. audiograms) per subject (pid)
+summarytable <- data %>% count(group, pid)
+
+ggplot(data = summarytable, aes(x = n, fill = group)) +
+  geom_histogram(binwidth = 1) +
+  facet_wrap(~ group) +
   xlab("# of measurements") +
-  ylab("Frequency (# patients)") 
-  png(file="results/hist.png")
-  dev.off()
+  ylab("Frequency (# patients)")
+dev.print(pdf, '../results/histogram_number_meas_pid.pdf')
 ```
 
 Relation of PTA with age for the different groups; connecting lines show longitudinal data of patients' PTA over time
 
 ```{r}
-ggplot(data, aes(x = Leeftijd, y = PTA54ADS, group = pid, color = group)) + 
-  #xlab("Age (years)") +
-  #ylab("PTA (dB HL)") +
+ggplot(data, aes(
+  x = Leeftijd,
+  y = PTA54ADS,
+  group = pid,
+  color = group
+)) +
   geom_point(aes(colour = factor(group))) +
-  geom_line(data=data, size=1, alpha = .3) +
-  geom_hline(yintercept=0,linetype="dashed") +
-  scale_x_continuous(breaks=seq(0,100,20)) +
-  scale_y_reverse(breaks=seq(-10,130,20), limits=c(130,-10)) +
-  #scale_y_reverse(limits=c(130,-10)) +
+  geom_line(data = data, size = 1, alpha = .3) +
+  geom_hline(yintercept = 0, linetype = "dashed") +
+  scale_x_continuous(breaks = seq(0, 100, 20)) +
+  scale_y_reverse(breaks = seq(-10, 130, 20), limits = c(130, -10)) +
   xlab("Age (years)") +
   ylab("PTA (dB HL)") +
-  theme_light() 
+  theme_light()
+dev.print(pdf, '../results/pta_age_pid_groups.pdf')
 ```
 ## Logistic fit of PTA with age
-Perform non-linear fit; first focus on LCCL domain. 
+Perform fits to the data; first focus on LCCL domain. 
 
 ```{r}
-lccl = subset(data, group=="LCCL")
-ggplot(lccl, aes(x=Leeftijd, y=PTA54ADS), group=pid, color=group) +
+lccl = subset(data, group == "LCCL")
+ggplot(lccl,
+       aes(x = Leeftijd, y = PTA54ADS),
+       group = pid,
+       color = group) +
   xlab("Age (years)") +
   ylab("PTA (dB HL)") +
   geom_point(aes(colour = factor(group))) +
-  geom_hline(yintercept=0,linetype="dashed") +
-  scale_x_continuous(breaks=seq(0,100,20)) +
-  scale_y_reverse(breaks=seq(-10,130,20), limits=c(130,-10)) +
-  #scale_y_reverse(limits=c(130,-10)) +
+  geom_hline(yintercept = 0, linetype = "dashed") +
+  scale_x_continuous(breaks = seq(0, 100, 20)) +
+  scale_y_reverse(breaks = seq(-10, 130, 20), limits = c(130,-10)) +
   theme_light()
+dev.print(pdf, '../results/pta_age_pid_lccl.pdf')
 ```
-
+Try to fit the data with a linear function, a power-law function and a logistic function:
 ```{r}
-lin_fit <- nls(PTA54ADS ~ a*Leeftijd + b, lccl)
+lin_fit <-
+  nls(PTA54ADS ~ a * Leeftijd + b,
+      data = lccl,
+      start = list(a = 1.5, b = 0))
 summary(lin_fit)
 ```
 ```{r}
-nls_fit <- nls(PTA54ADS ~ a*Leeftijd^b, lccl, start = list(a = 0.05, b = 1.5))
+nls_fit <-
+  nls(PTA54ADS ~ a * Leeftijd ^ b,
+      data = lccl,
+      start = list(a = 0.05, b = 1.5))
 summary(nls_fit)
 ```
 ```{r}
 startvec <- c(Asym = 120, xmid = 50, scal = 15)
-nls_logis<- nls(PTA54ADS ~ SSlogis(Leeftijd, Asym, xmid, scal),
-                 data=lccl,
+nls_logis <- nls(PTA54ADS ~ SSlogis(Leeftijd, Asym, xmid, scal),
+                 data = lccl,
                  start = startvec)
 summary(nls_logis)
 ```
 
 Compare power-law fit and the logistic functione and display the results
 ```{r}
-anova(nls_fit,nls_logis)
+anova(nls_fit, nls_logis)
 ```
 
 
 ```{r}
 newdat = expand.grid(Leeftijd = seq(0, 100, by = 1))
-newdat$lin <-predict(lin_fit, newdata = newdat)
-newdat$pta_logistic <- predict(nls_logis,newdata = newdat)
-newdat$pta_power <- predict(nls_fit,newdata = newdat)
+newdat$lin <- predict(lin_fit, newdata = newdat)
+newdat$pta_logistic <- predict(nls_logis, newdata = newdat)
+newdat$pta_power <- predict(nls_fit, newdata = newdat)
 #newdat
-ggplot(lccl, aes(x=Leeftijd, y=PTA54ADS)) +
+ggplot(lccl, aes(x = Leeftijd, y = PTA54ADS)) +
   geom_point(aes(colour = factor(group))) +
-  geom_line(data = newdat, aes(y = lin), size = 1, col='blue') +
+  geom_line(data = newdat,
+            aes(y = lin),
+            size = 1,
+            col = 'blue') +
   geom_line(data = newdat, aes(y = pta_logistic), size = 1) +
-  geom_line(data = newdat, aes(y = pta_power), size = 1, col='red') +
- 
-  geom_hline(yintercept=0,linetype="dashed") +
-  scale_x_continuous(breaks=seq(0,100,20)) +
-  scale_y_reverse(breaks=seq(-10,130,20), limits=c(130,-10)) +
+  geom_line(data = newdat,
+            aes(y = pta_power),
+            size = 1,
+            col = 'red') +
+  geom_hline(yintercept = 0, linetype = "dashed") +
+  scale_x_continuous(breaks = seq(0, 100, 20)) +
+  scale_y_reverse(breaks = seq(-10, 130, 20), limits = c(130, -10)) +
   #scale_y_reverse(limits=c(130,-10)) +
   xlab("Age (years)") +
   ylab("PTA (dB HL)") +
-  theme_light() 
+  theme_light()
+dev.print(pdf, '../results/pta_age_lccl_fits.pdf')
 
 ```
             
@@ -152,10 +201,10 @@ This function has also been used in desribing the (frequency-specific) threshold
 ## Group comparison
 The main questions is whether the function that describes the PTA (dB HL) as a function of age (years) differs between the groups \@ref(fig:plot_pta_age_groups). 
 
-
 Start with a group-fit; discarding grouping information
 ```{r}
-fit0 <- nls(PTA54ADS ~ SSlogis(Leeftijd, Asym, xmid, scal), data=data)
+fit0 <-
+  nls(PTA54ADS ~ SSlogis(Leeftijd, Asym, xmid, scal), data = data)
 summary(fit0)
 coef(fit0)
 ```
@@ -164,17 +213,30 @@ Now, add a grouping-variable with the mid-point (xmid)
 ```{r}
 # https://stats.stackexchange.com/questions/27273/how-do-i-fit-a-nonlinear-mixed-effects-model-for-repeated-measures-data-using-nl
 # https://stats.stackexchange.com/questions/316801/how-to-compare-logistic-regression-curves
-fit1 <- nls(PTA54ADS ~ SSlogis(Leeftijd, Asym, xmid[group], scal), 
-            data=data,
-            start=list(Asym=rep(120,1), xmid=rep(50,3), scal=rep(15,1)))
+fit1 <- nls(
+  PTA54ADS ~ SSlogis(Leeftijd, Asym, xmid[group], scal),
+  data = data,
+  start = list(
+    Asym = rep(120, 1),
+    xmid = rep(50, 3),
+    scal = rep(15, 1)
+  )
+)
 summary(fit1)
 ```
 And add the scaling [scal] as a grouping variable; does it futher explain differences between groups?
 
 ```{r}
-fit2 <- nls(PTA54ADS ~ SSlogis(Leeftijd, Asym, xmid[group], scal[group]), 
-            data=data,
-            start=list(Asym=rep(120,1), xmid=rep(50,3), scal=rep(15,3)))
+fit2 <-
+  nls(
+    PTA54ADS ~ SSlogis(Leeftijd, Asym, xmid[group], scal[group]),
+    data = data,
+    start = list(
+      Asym = rep(120, 1),
+      xmid = rep(50, 3),
+      scal = rep(15, 3)
+    )
+  )
 summary(fit2)
 ```
 ```{r}
@@ -183,190 +245,356 @@ plot(profile(fit2))
 
 And now add the asymptotic value of the fit (Leeftijd -> infinity) (Asym):
 ```{r}
-fit3 <- nls(PTA54ADS ~ SSlogis(Leeftijd, Asym[group], xmid[group], scal[group]), 
-            data=data,
-            start=list(Asym=rep(120,3), xmid=rep(50,3), scal=rep(15,3)))
+fit3 <-
+  nls(
+    PTA54ADS ~ SSlogis(Leeftijd, Asym[group], xmid[group], scal[group]),
+    data = data,
+    start = list(
+      Asym = rep(120, 3),
+      xmid = rep(50, 3),
+      scal = rep(15, 3)
+    )
+  )
 summary(fit3)
 ```
 
 Now test the various models. Which of the parameters explain the data best?
 ```{r}
-anova(fit0,fit1,fit2,fit3)
+anova(fit0, fit1, fit2, fit3)
 ```
-It turns out the both the variables [xmid] and [scale], i.e. the midpoint and slope at the midpoint significantly differ between the three groups, but that adding the asymptotic value does not describe the data signigicantly better. 
+It turns out the both the variables [xmid] and [scale], i.e. the midpoint and slope at the midpoint significantly differ between the three groups, but that adding the asymptotic value does not describe the data signigicantly better (F=0.89, p=0.41). Fit the data and plot the results:
 
 
 ```{r}
-newdat = expand.grid(Leeftijd = seq(0, 100, by = 1), group = c("LCCL","vWFA1","vWFA2"))
+newdat = expand.grid(Leeftijd = seq(0, 100, by = 1),
+                     group = c("LCCL", "vWFA1", "vWFA2"))
 newdat$fit <- predict(fit2, newdata = newdat)
 ```
 ```{r}
-
-ggplot(data, aes(x=Leeftijd, y=PTA54ADS, group = pid, color = group)) +
-  geom_point(aes(colour = factor(group)),alpha = .7) +
-  geom_line(data=data, size=1, alpha = .3) +
-  geom_line(data = newdat, aes(y = fit, group = group, colour = factor(group)), size = 2) +
-  geom_hline(yintercept=0,linetype="dashed") +
-  scale_x_continuous(breaks=seq(0,100,20)) +
-  scale_y_reverse(breaks=seq(-10,130,20), limits=c(130,-10)) +
-  #scale_y_reverse(limits=c(130,-10)) +
+ggplot(data, aes(
+  x = Leeftijd,
+  y = PTA54ADS,
+  group = pid,
+  color = group
+)) +
+  geom_point(aes(colour = factor(group)), alpha = .4) +
+  geom_line(data = data, size = 1, alpha = .2) +
+  geom_line(data = newdat,
+            aes(
+              y = fit,
+              group = group,
+              colour = factor(group)
+            ),
+            size = 1) +
+  geom_hline(yintercept = 0, linetype = "dashed") +
+  scale_x_continuous(breaks = seq(0, 100, 20)) +
+  scale_y_reverse(breaks = seq(-10, 130, 20), limits = c(130, -10)) +
   xlab("Age (years)") +
   ylab("PTA (dB HL)") +
-  theme_light() 
+  theme_light()
+dev.print(pdf, '../results/pta_age_pid_groups_fits.pdf')
 ```
 
-Now perform fit on individual data by subsetting the data to keep individuals with more that 4 longitudinal datapoints. Is it the case that using a non-linear mixed-model approach may helpt us?
+Now perform fit on individual data by subsetting the data to keep individuals with more that x=2 longitudinal datapoints. Is it the case that using a non-linear mixed-model approach may help us?
 
 ```{r}
 #https://stackoverflow.com/questions/14439770/filter-rows-in-dataframe-by-number-of-rows-per-level-of-a-factor
-pidlengths <- ave(as.numeric(data$pid), 
-                     data$pid, FUN = length)
+pidlengths <- ave(as.numeric(data$pid),
+                  data$pid, FUN = length)
 #df2 <- lccl[pidlengths > 5, ]
-df2 <- data[pidlengths > 2, ]
-with(df2, table(group))
-```
-```{r}
-models <- nlsList(PTA54ADS ~ SSlogis(Leeftijd, Asym, xmid, scal) | pid, data = df2)
-```
+df2 <- data[pidlengths > 2,]
+t3 <- with(df2, table(group))
 
+```
+So, with only two data-points, only 3 and 6 subjects for the vWFA1 and vWFA2 domain respectively, remain. Now, fit those with a logistic function (SSlogis) using nlslist.
+
+```{r}
+models <-
+  nlsList(PTA54ADS ~ SSlogis(Leeftijd, Asym, xmid, scal) |
+            pid, data = df2)
+```
 As we can see, some model-predictions failed; they end up with NaNs in the model fit list (nlslist); see e.g. pid 147
 
 ```{r}
-data_id <- subset(df2, pid=="147")
+data_id <- subset(df2, pid == "147")
 data_id
-ggplot(data=data_id,  aes(x=Leeftijd, y=PTA54ADS)) +
+ggplot(data = data_id,  aes(x = Leeftijd, y = PTA54ADS)) +
   geom_point() +
-  geom_hline(yintercept=0,linetype="dashed") +
-  scale_x_continuous(breaks=seq(0,100,20)) +
-  scale_y_reverse(breaks=seq(-10,130,20), limits=c(130,-10)) +
+  geom_hline(yintercept = 0, linetype = "dashed") +
+  scale_x_continuous(breaks = seq(0, 100, 20)) +
+  scale_y_reverse(breaks = seq(-10, 130, 20), limits = c(130, -10)) +
   #scale_y_reverse(limits=c(130,-10)) +
   xlab("Age (years)") +
   ylab("PTA (dB HL)") +
+  xlim(0,100)+
   theme_light() 
 ```
 
 Predict for all pid's the fit to the model and remove the pid's that give NaNs. Check how many subjects per group we end up with.
 
 ```{r}
-df2$Pred <-predict(models)
+df2$Pred <- predict(models)
 df2_na <- na.omit(df2)
-with(df2_na, table(group, pid))
+df2_na_stats <- with(df2_na, table(group, pid))
+df2_na_stats
 ```
-We only keep the pid's from the LCCL group. The pid's in the other groups are not properly fitted.
+We only keep the pid's from the LCCL group. The pid's in the other groups are not properly fitted. Also note that the minimum of data-points for a reasonable fit is 4.
+
 
 ```{r}
 le <- unique(df2_na$pid)
-#le
-newdat = expand.grid(Leeftijd = seq(0, 100, by = 1), pid=le)
-newdat$prednlm <-predict(models, newdata=newdat)
+newdat = expand.grid(Leeftijd = seq(0, 100, by = 1), pid = le)
+newdat$prednlm <- predict(models, newdata = newdat)
 ```
 
-```{r}
+```{r fig.height = 5, fig.width = 7}
 #https://stackoverflow.com/questions/37122994/plotting-a-list-of-non-linear-regressions-with-ggplot
 #https://aosmith.rbind.io/2018/11/16/plot-fitted-lines/
-ip <- ggplot(data=df2_na,  aes(x=Leeftijd, y=PTA54ADS, colour = pid)) +
+ggplot(data = df2_na,  aes(x = Leeftijd, y = PTA54ADS, colour = pid)) +
   geom_point() +
-  geom_line(data=newdat,aes(y=prednlm)) +
-  facet_wrap(~pid) +
-  geom_hline(yintercept=0,linetype="dashed") +
-  scale_x_continuous(breaks=seq(0,100,20)) +
-  scale_y_reverse(breaks=seq(0,120,40), limits=c(130,-10)) +
+  geom_line(data = newdat, aes(y = prednlm)) +
+  facet_wrap(~ pid) +
+  geom_hline(yintercept = 0, linetype = "dashed") +
+  scale_x_continuous(breaks = seq(0, 100, 25)) +
+  scale_y_reverse(breaks = seq(0, 120, 40), limits = c(130,-10)) +
   #scale_y_reverse(limits=c(130,-10)) +
   xlab("Age (years)") +
   ylab("PTA (dB HL)") +
-  theme_light() 
-ip
+  theme_light()
+
+dev.print(pdf, '../results/pta_age_pid_lccl_ind_fits.pdf')
 ```
 
 So, it seeems we can fit the data for individual subjects by some extent. It often 'fails' by over- or underestimating the tail (coef.lmlist Asym column). We can also plot it all in one figure.
 
 ```{r}
-ggplot(data=df2_na,  aes(x=Leeftijd, y=PTA54ADS, colour = pid)) +
+ggplot(data = df2_na,  aes(x = Leeftijd, y = PTA54ADS, colour = pid)) +
   geom_point() +
-  geom_line(data=newdat,aes(y=prednlm, group = pid)) +
-  geom_hline(yintercept=0,linetype="dashed") +
-  scale_x_continuous(breaks=seq(0,100,20)) +
-  scale_y_reverse(breaks=seq(-10,130,20), limits=c(130,-10)) +
-  #scale_y_reverse(limits=c(130,-10)) +
+  geom_line(data = newdat, aes(y = prednlm, group = pid)) +
+  geom_hline(yintercept = 0, linetype = "dashed") +
+  scale_x_continuous(breaks = seq(0, 100, 20)) +
+  scale_y_reverse(breaks = seq(-10, 130, 20), limits = c(130,-10)) +
   xlab("Age (years)") +
   ylab("PTA (dB HL)") +
-  theme_light() 
+  theme_light()
+dev.print(pdf, '../results/pta_age_pid_lccl_ind_fits_overlay.pdf')
 ```
-Feed the remaining data into the non-linear mixed-models with the parameters Asym,  xmid, and scal as random factors.
+Feed the remaining data into the non-linear mixed-models with the parameters Asym, xmid, and scal as random factors.
 
 ```{r}
-nm1 <- nlmer(PTA54ADS ~ SSlogis(Leeftijd, Asym, xmid, scal) ~ Asym + xmid + scal | pid, df2_na, start = c(Asym = 100, xmid = 60, scal = 15), corr = FALSE)
+nm1 <-
+  nlmer(
+    PTA54ADS ~ SSlogis(Leeftijd, Asym, xmid, scal) ~ Asym + xmid + scal |
+      pid,
+    df2_na,
+    method="ML",
+    start = c(Asym = 100, xmid = 60, scal = 15),
+    corr = FALSE
+  )
 summary(nm1)
-coef(nm1)
+```
+```{r}
+plot(ranef(nm1,augFrame=T))
 ```
 
 ```{r}
-require(lattice) 
-qqmath(ranef(nm1, condVar=TRUE))
+params <- coef(nm1)
+head(params)
+#sjplot(nm1)
+```
 
+```{r}
+require(lattice)
+qqmath(ranef(nm1, condVar = TRUE))
 ```
 
 ## Frequencey-specific analyses
 Now subset the data to contain individual frequencies
 ```{r}
-data_all <- subset(data_subset, select=c('pid', 'group', 'Leeftijd', '250.AD','500.AD', '1000.AD','2000.AD','4000.AD','8000.AD', '250.AS','500.AS', '1000.AS','2000.AS','4000.AS','8000.AS'))
+data_all <-
+  subset(
+    data_subset,
+    select = c(
+      'pid',
+      'group',
+      'Leeftijd',
+      '250.AD',
+      '500.AD',
+      '1000.AD',
+      '2000.AD',
+      '4000.AD',
+      '8000.AD',
+      '250.AS',
+      '500.AS',
+      '1000.AS',
+      '2000.AS',
+      '4000.AS',
+      '8000.AS'
+    )
+  )
 head(data_all)
 ```
 Convert 'wide' dataset into 'long' format using tidyr and remove NaNs
 
 ```{r}
 tidier <- data_all %>%
-  gather(f, dB, -pid, -group, -Leeftijd)
+  gather(f, dB,-pid,-group,-Leeftijd)
 data_all_l <- tidier %>%
   separate(f, into = c("frequency", "ear"), sep = "\\.")
 #head(data_all_l)
 data_all_l$frequency = factor(data_all_l$frequency)
-data_all_l$ear= factor(data_all_l$ear)
+data_all_l$ear = factor(data_all_l$ear)
 data_all_l <- na.omit(data_all_l)
-#head(data_all_l)
+head(data_all_l)
 ```
-
-
 
 
 ```{r}
-p <- data_all_l%>%
-  mutate(frequency = fct_relevel(frequency,"250", "500", "1000", "2000", "4000", "8000")) %>%
+p <- data_all_l %>%
+  mutate(frequency = fct_relevel(frequency, "250", "500", "1000", "2000", "4000", "8000")) %>%
   ggplot(aes(x = frequency, y = dB)) +
-    #geom_bar(stat="identity") +
-    #geom_histogram() +
-    geom_violin() + 
-    facet_wrap(~ group, ncol = 3) +
-    #geom_point()
-    xlab("Frequency (Hz)") +
-    ylab("Hearing level (dB)") +
-    scale_y_reverse(limits=c(130,-10)) 
-    #theme_classic()
+  #geom_bar(stat="identity") +
+  #geom_histogram() +
+  geom_violin() +
+  facet_wrap( ~ group, ncol = 3) +
+  #geom_point()
+  xlab("Frequency (Hz)") +
+  ylab("Hearing level (dB)") +
+  scale_y_reverse(breaks = seq(-10, 130, 20), limits = c(130, -10)) +
+  theme_light()
+  #theme_classic()
 p
+dev.print(pdf, '../results/violin_plot_HL_groups.pdf')
 ```
+```{r fig.height = 4, fig.width = 6}
+data_all_l$f = factor(data_all_l$frequency,
+                      levels = c('250', '500', '1000', '2000', '4000', '8000'))
+ggplot(data_all_l, aes(
+  x = Leeftijd,
+  y = dB,
+  group = f,
+  color = group
+)) +
+  geom_point(size = 0.7) +
+  facet_wrap( ~ f) +
+  geom_hline(yintercept = 0, linetype = "dashed") +
+  scale_x_continuous(breaks = seq(0, 100, 25)) +
+  scale_y_reverse(breaks = seq(0, 120, 40), limits = c(130, -10)) +
+  #scale_y_reverse(limits=c(130,-10)) +
+  xlab("Age (years)") +
+  ylab("Hearing level (dB HL)") +
+  theme_light()
+dev.print(pdf, '../results/HL_age_frequency_groups.pdf')
+
+```
+
+
+```{r}
+models <-
+  nlsList(
+    dB ~ SSlogis(Leeftijd, Asym, xmid, scal) |
+      f,
+    data = data_all_l,
+    start = c(Asym = 100, xmid = 60, scal = 15)
+  )
+summary(models)
+
+```
+
+```{r fig.height = 7, fig.width = 10}
+ggplot(data = data_all_l, aes(
+  x = Leeftijd,
+  y = dB,
+  group = group,
+  color = group
+)) +
+  #geom_point(size=0.4) +
+  geom_jitter(size = 0.4) +
+  geom_smooth(method = "lm") +
+  facet_wrap( ~ f) +
+  xlab("Age (years)") +
+  ylab("PTA (dB HL)") +
+  geom_hline(yintercept = 0, linetype = "dashed") +
+  scale_x_continuous(breaks = seq(0, 100, 20)) +
+  scale_y_reverse(breaks = seq(-10, 130, 20), limits = c(130, -10)) +
+  theme_light()
+
+```
+Now use the linear fits to construct an ARTA 
+```{r, fig.height = 5, fig.width = 5, fig.asp=0.8}
+par(pty = "s")
+#see: https://stackoverflow.com/questions/1169539/linear-regression-and-group-by-in-r
+library(lme4)
+arta_data <- subset(data_all_l, group == "vWFA2")
+fits.plm <- lmList(dB ~ Leeftijd | frequency, data = arta_data)
+coef(fits.plm)
+ci <- confint(fits.plm)
+plot(ci)
+newdat = expand.grid(
+  Leeftijd = seq(20, 70, by = 10),
+  frequency = c("250", "500", "1000", "2000", "4000", "8000")
+)
+newdat$fit <- predict(fits.plm, newdata = newdat)
+
+head(newdat)
+
+ggplot(data = newdat, aes(x = frequency, y = fit, group = Leeftijd)) +
+  geom_line(aes(
+    x = frequency,
+    y = fit,
+    group = Leeftijd,
+    color = Leeftijd
+  )) +
+  scale_y_reverse(breaks = seq(-10, 130, 20), limits = c(130, -10)) +
+  # scale_x_discrete(breaks=c("250","500","1000","2000","4000","8000"), labels=c("0.25","0.5","1","2","4","8"")) +
+  xlab("Frequency (Hz)") +
+  ylab("Hearing threshold (dB HL)") +
+  guides(color = guide_legend("Leeftijd")) +
+  theme_classic()
+```
+
+```{r}
+library(dplyr)
+fitted_models = data_all_l %>% group_by(frequency) %>% do(model = lm(dB ~ Leeftijd, data = .))
+fitted_models
+```
+
 
 simple linear model: PTA is a function of the affected domain; here are two levels in this mixed model; 
 1: timepoints for each patient; 2: genetic domain, with domain the fixed effect and patient the random effect allowing
 the intercept to vary across patient (~1|pid).
 
 ```{r}
-random_intercept <-lme(dB ~ frequency , 
-            random = ~1|pid,   #p. 896
-            method = "ML", 
-            na.action = na.exclude, 
-            control = list(opt="optim"),
-            correlation = corAR1(),  #see p.897; timepoints are not equally spaced;use corCAR1 
-            data = data_all_l)
+random_intercept <- lme(
+  dB ~ frequency ,
+  random = ~ 1 | pid,
+  #p. 896
+  method = "ML",
+  na.action = na.exclude,
+  control = list(opt = "optim"),
+  correlation = corAR1(),
+  #see p.897; timepoints are not equally spaced;use corCAR1
+  data = data_all_l
+)
 summary(random_intercept)
 anova(random_intercept)
 ```
 now add Leeftijd as fixed effect; PTA ~ Domain + Leeftijd` (see. e.g. p.897)
 ```{r}
-timeRI <- update(random_intercept, .~. + Leeftijd)
+timeRI <- update(random_intercept, . ~ . + Leeftijd)
 summary(timeRI)
 ```
 
 ```{r}
 sessionInfo()
+```
+
+# Code Appendix
+```{r getlabels, echo = FALSE}
+labs = knitr::all_labels()
+labs = labs[!labs %in% c("setup", "toc", "getlabels", "allcode")]
+```
+
+```{r allcode, ref.label = labs, eval = FALSE}
 ```
 
